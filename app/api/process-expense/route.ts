@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+// @ts-expect-error - pdf-parse has no TypeScript types
+import pdfParse from 'pdf-parse';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
@@ -66,7 +68,6 @@ export async function POST(req: NextRequest) {
     } else if (fileField && fileField instanceof Blob) {
       // Processamento de PDF
       const buffer = Buffer.from(await fileField.arrayBuffer());
-      const pdfParse = (await import('pdf-parse')).default;
       const parsed = await pdfParse(buffer);
       inputText = parsed.text;
     } else {
