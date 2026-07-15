@@ -664,7 +664,7 @@ export default function Dashboard() {
                             <Cell key={`cell-${idx}`} fill={entry.color} />
                           ))}
                         </Pie>
-                        <ChartTooltip formatter={(value: number) => `R$ ${Number(value).toFixed(2)}`} />
+                        <ChartTooltip formatter={(value) => `R$ ${Number(value).toFixed(2)}`} />
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
