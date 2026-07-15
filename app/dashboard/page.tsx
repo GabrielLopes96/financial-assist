@@ -701,7 +701,7 @@ export default function Dashboard() {
                       <BarChart data={getComparisonData()} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
                         <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
                         <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
-                        <ChartTooltip formatter={(value: number) => `R$ ${Number(value).toFixed(2)}`} />
+                        <ChartTooltip formatter={(value) => `R$ ${Number(value).toFixed(2)}`} />
                         <Bar dataKey="Gasto" radius={[6, 6, 0, 0]}>
                           {getComparisonData().map((entry, idx) => (
                             <Cell key={`cell-${idx}`} fill={entry.fill} />
