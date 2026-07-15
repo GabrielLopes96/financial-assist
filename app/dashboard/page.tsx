@@ -2,8 +2,20 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { User } from '@supabase/supabase-js';
-import { PlusCircle, FileText, Mic, AlertCircle, TrendingUp, CheckCircle, Trash2, LogOut, Loader2, Calendar } from 'lucide-react';
+import { PlusCircle, FileText, Mic, AlertCircle, TrendingUp, CheckCircle, Trash2, LogOut, Loader2, Calendar, BarChart2, PieChart as PieIcon } from 'lucide-react';
+
+// Importação dos componentes do Recharts para os gráficos visuais
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip as ChartTooltip,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis
+} from 'recharts';
 
 interface Category {
   id: string;
@@ -30,21 +42,17 @@ interface Transaction {
   profiles?: Profile;
 }
 
-interface ExpenseImport {
-  description: string;
-  amount: number;
-  category: string;
-  is_shared: boolean;
-}
-
 export default function Dashboard() {
-  const [user, setUser] = useState<User | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [user, setUser] = useState<any>(null);
   const [partner, setPartner] = useState<Profile | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'entries' | 'charts'>('entries');
+  const [isMounted, setIsMounted] = useState(false);
   
-  // Controle de Visualização do Dashboard (Mês exibido no card e no histórico)
+  // Controle de Visualização do Dashboard (Mês exibido)
   const [selectedMonth, setSelectedMonth] = useState('');
   
   // Form State (Lançamento Manual)
@@ -54,7 +62,7 @@ export default function Dashboard() {
   const [isShared, setIsShared] = useState(true);
   const [isFixed, setIsFixed] = useState(false);
   const [paidBy, setPaidBy] = useState('');
-  const [targetMonth, setTargetMonth] = useState(''); // Mês da fatura destino
+  const [targetMonth, setTargetMonth] = useState('');
 
   // Estados de IA e Arquivos
   const [inputText, setInputText] = useState('');
@@ -79,6 +87,7 @@ export default function Dashboard() {
   const monthOptions = getMonthOptions();
 
   useEffect(() => {
+    setIsMounted(true);
     const currentMonthStr = new Date().toISOString().slice(0, 7);
     setSelectedMonth(currentMonthStr);
     setTargetMonth(currentMonthStr);
@@ -92,10 +101,11 @@ export default function Dashboard() {
       setUser(session.user);
       setPaidBy(session.user.id);
 
-      // Buscar parceiro cadastrado no banco
+      // Buscar parceiro
       const { data: profiles } = await supabase.from('profiles').select('id, full_name');
       if (profiles) {
-        const other = (profiles as Profile[]).find((p) => p.id !== session.user.id);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const other = profiles.find((p: any) => p.id !== session.user.id);
         if (other) setPartner(other);
       }
 
@@ -125,7 +135,7 @@ export default function Dashboard() {
     const { data: txs } = await supabase
       .from('transactions')
       .select('*, categories(*), profiles(*)')
-      .eq('month_reference', selectedMonth) // Filtra estritamente pelo mês da fatura selecionada
+      .eq('month_reference', selectedMonth)
       .order('date', { ascending: false });
 
     if (txs) {
@@ -136,6 +146,35 @@ export default function Dashboard() {
     }
   };
 
+  // Funções de Cálculo dos Gráficos
+  const getCategoryData = () => {
+    const grouped: { [key: string]: { name: string; value: number; color: string } } = {};
+    transactions.forEach(t => {
+      const catName = t.categories?.name || 'Outros';
+      const catColor = t.categories?.color || '#cbd5e1';
+      if (!grouped[catName]) {
+        grouped[catName] = { name: catName, value: 0, color: catColor };
+      }
+      grouped[catName].value += t.amount;
+    });
+    return Object.values(grouped);
+  };
+
+  const getComparisonData = () => {
+    const myTotal = transactions
+      .filter(t => t.paid_by_id === user?.id)
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    const partnerTotal = transactions
+      .filter(t => t.paid_by_id === partner?.id)
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    return [
+      { name: 'Você', 'Gasto': myTotal, fill: '#059669' },
+      { name: partner?.full_name || 'Parceira', 'Gasto': partnerTotal, fill: '#0f766e' }
+    ];
+  };
+
   const handleManualAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!desc || !val) return;
@@ -143,13 +182,12 @@ export default function Dashboard() {
     const baseAmount = parseFloat(val);
     const todayStr = new Date().toISOString().split('T')[0];
 
-    // Se for um gasto fixo agendado para 12 meses
     if (isFixed) {
       const payloads = [];
       const [year, month] = targetMonth.split('-').map(Number);
       
       for (let i = 0; i < 12; i++) {
-        const futureDate = new Date(year, (month - 1) + i, 15); // Dia 15 evita bugs de fuso horário na conversão de string
+        const futureDate = new Date(year, (month - 1) + i, 15);
         const futureMonthRef = futureDate.toISOString().slice(0, 7);
 
         payloads.push({
@@ -160,7 +198,7 @@ export default function Dashboard() {
           is_shared: isShared,
           is_fixed: true,
           date: todayStr,
-          month_reference: futureMonthRef // Cada inserção mapeada para a respectiva fatura mensal futura
+          month_reference: futureMonthRef
         });
       }
 
@@ -169,12 +207,11 @@ export default function Dashboard() {
         setDesc('');
         setVal('');
         fetchTransactions();
-        alert('Gasto fixo agendado com sucesso para as faturas dos próximos 12 meses!');
+        alert('Gasto fixo agendado com sucesso!');
       } else {
-        alert('Erro ao agendar gastos fixos.');
+        alert('Erro ao agendar.');
       }
     } else {
-      // Gasto comum único direcionado à fatura selecionada
       const payload = {
         description: desc,
         amount: baseAmount,
@@ -205,13 +242,12 @@ export default function Dashboard() {
   };
 
   const processTextWithIA = async (text: string) => {
-    if (!user) return;
     setProcessingFile(true);
     try {
       const formData = new FormData();
       formData.append('text', text);
       formData.append('paid_by_id', user.id);
-      formData.append('month_reference', targetMonth); // Define para onde as despesas extraídas devem ir
+      formData.append('month_reference', targetMonth);
 
       const res = await fetch('/api/process-expense', {
         method: 'POST',
@@ -220,7 +256,8 @@ export default function Dashboard() {
 
       const data = await res.json();
       if (data.success && data.expenses) {
-        const formattedExpenses = data.expenses.map((exp: ExpenseImport) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const formattedExpenses = data.expenses.map((exp: any) => {
           const matchingCat = categories.find(c => c.name.toLowerCase().includes(exp.category.toLowerCase())) || categories[0];
           return {
             description: exp.description,
@@ -230,16 +267,16 @@ export default function Dashboard() {
             is_shared: exp.is_shared,
             is_fixed: false,
             date: new Date().toISOString().split('T')[0],
-            month_reference: targetMonth // Força todas a caírem na fatura escolhida
+            month_reference: targetMonth
           };
         });
 
         const { error } = await supabase.from('transactions').insert(formattedExpenses);
         if (error) throw error;
-        alert(`${formattedExpenses.length} despesas lançadas pela IA na fatura de ${monthOptions.find(o => o.value === targetMonth)?.label}!`);
+        alert(`${formattedExpenses.length} despesas lançadas pela IA!`);
         fetchTransactions();
       } else {
-        alert(data.error || 'Erro no processamento da IA.');
+        alert(data.error || 'Erro na IA.');
       }
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : 'Erro desconhecido';
@@ -251,7 +288,6 @@ export default function Dashboard() {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!user) return;
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -268,7 +304,8 @@ export default function Dashboard() {
       });
       const data = await res.json();
       if (data.success && data.expenses) {
-        const formattedExpenses = data.expenses.map((exp: ExpenseImport) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const formattedExpenses = data.expenses.map((exp: any) => {
           const matchingCat = categories.find(c => c.name.toLowerCase().includes(exp.category.toLowerCase())) || categories[0];
           return {
             description: exp.description,
@@ -284,7 +321,7 @@ export default function Dashboard() {
 
         const { error } = await supabase.from('transactions').insert(formattedExpenses);
         if (error) throw error;
-        alert(`Extrato importado! ${formattedExpenses.length} despesas salvas em ${monthOptions.find(o => o.value === targetMonth)?.label}.`);
+        alert(`Extrato importado com sucesso!`);
         fetchTransactions();
       } else {
         alert(data.error || 'Erro ao importar PDF.');
@@ -301,7 +338,7 @@ export default function Dashboard() {
     router.push('/login');
   };
 
-  // Cálculos matemáticos baseados apenas na lista atual de transações (já filtradas por mês)
+  // Cálculos matemáticos das despesas compartilhadas
   const my_paid_shared_total = transactions
     .filter(t => t.paid_by_id === user?.id && t.is_shared)
     .reduce((sum, t) => sum + t.amount, 0);
@@ -382,11 +419,11 @@ export default function Dashboard() {
 
           <div className="flex justify-between border-t border-white/20 mt-4 pt-3 text-[10px] text-teal-50">
             <div>
-              <span>Você pagou (neste mês):</span>
+              <span>Você pagou:</span>
               <p className="font-bold text-xs text-white">R$ {my_paid_shared_total.toFixed(2)}</p>
             </div>
             <div className="text-right">
-              <span>Ela pagou (neste mês):</span>
+              <span>Ela pagou:</span>
               <p className="font-bold text-xs text-white">R$ {partner_paid_shared_total.toFixed(2)}</p>
             </div>
           </div>
@@ -396,176 +433,307 @@ export default function Dashboard() {
       {/* Container Principal */}
       <main className="px-4 py-6 space-y-6 flex-1">
         
-        {/* Escolha da Fatura de Destino */}
-        <section className="bg-slate-100 p-3.5 rounded-xl border border-slate-200 flex items-center justify-between">
-          <div className="text-xs">
-            <p className="font-bold text-slate-700">Lançar gastos para qual fatura?</p>
-            <p className="text-[10px] text-slate-400">Escolha o mês de vencimento correspondente.</p>
-          </div>
-          <select
-            className="p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 cursor-pointer focus:outline-none"
-            value={targetMonth}
-            onChange={(e) => setTargetMonth(e.target.value)}
+        {/* Seletor de Abas (Navegação Interna) */}
+        <div className="flex bg-slate-200/60 p-1 rounded-xl shadow-inner border border-slate-200/30">
+          <button
+            onClick={() => setActiveTab('entries')}
+            className={`flex-1 py-2 text-xs font-extrabold rounded-lg transition-all ${
+              activeTab === 'entries'
+                ? 'bg-white text-slate-800 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
           >
-            {monthOptions.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </section>
+            Lançamentos & Registro
+          </button>
+          <button
+            onClick={() => setActiveTab('charts')}
+            className={`flex-1 py-2 text-xs font-extrabold rounded-lg transition-all ${
+              activeTab === 'charts'
+                ? 'bg-white text-slate-800 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            Gráficos & Análise 📊
+          </button>
+        </div>
 
-        {/* Lançamento Rápido com IA */}
-        <section className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-          <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-1.5">
-            <TrendingUp className="w-4 h-4 text-emerald-600" /> Lançamento Rápido com IA (Texto/Áudio/PDF)
-          </h3>
-
-          <div className="space-y-3">
-            <textarea
-              className="w-full p-3 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-400"
-              rows={2}
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder={`Escreva ex: "Gastei 150 no mercado hoje compartilhado". Vai cair na fatura de ${monthOptions.find(o => o.value === targetMonth)?.label}...`}
-            />
-
-            <div className="flex gap-2">
-              {inputText.trim().length > 0 && (
-                <button
-                  onClick={() => processTextWithIA(inputText)}
-                  disabled={processingFile}
-                  className="flex-1 p-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
-                >
-                  <CheckCircle className="w-4 h-4" /> Enviar para IA
-                </button>
-              )}
-
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                accept="application/pdf, text/plain"
-                className="hidden"
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={processingFile}
-                className="flex-1 p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 border border-slate-200"
+        {/* ABA DE LANÇAMENTOS */}
+        {activeTab === 'entries' && (
+          <div className="space-y-6">
+            {/* Escolha da Fatura de Destino */}
+            <section className="bg-slate-100 p-3.5 rounded-xl border border-slate-200 flex items-center justify-between">
+              <div className="text-xs">
+                <p className="font-bold text-slate-700">Lançar gastos para qual fatura?</p>
+                <p className="text-[10px] text-slate-400">Escolha o mês de vencimento correspondente.</p>
+              </div>
+              <select
+                className="p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 cursor-pointer focus:outline-none"
+                value={targetMonth}
+                onChange={(e) => setTargetMonth(e.target.value)}
               >
-                <FileText className="w-4 h-4 text-teal-600" />
-                {processingFile ? 'Lendo PDF...' : 'Subir PDF'}
-              </button>
+                {monthOptions.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </section>
 
-              <button
-                onClick={() => {
-                  const simulaAudio = prompt("O que você diria no áudio?", "Lança 45 reais na pizza ontem de noite compartilhada");
-                  if (simulaAudio) {
-                    processTextWithIA(simulaAudio);
-                  }
-                }}
-                className="p-2.5 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded-xl text-xs font-bold transition-all border border-teal-200"
-                title="Mandar Áudio"
-              >
-                <Mic className="w-4 h-4" />
-              </button>
-            </div>
+            {/* Lançamento Rápido com IA */}
+            <section className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+              <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-1.5">
+                <TrendingUp className="w-4 h-4 text-emerald-600" /> Lançamento Rápido com IA
+              </h3>
+
+              <div className="space-y-3">
+                <textarea
+                  className="w-full p-3 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 placeholder-slate-400"
+                  rows={2}
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  placeholder={`Escreva ex: "Gastei 150 no mercado hoje compartilhado". Vai cair na fatura de ${monthOptions.find(o => o.value === targetMonth)?.label}...`}
+                />
+
+                <div className="flex gap-2">
+                  {inputText.trim().length > 0 && (
+                    <button
+                      onClick={() => processTextWithIA(inputText)}
+                      disabled={processingFile}
+                      className="flex-1 p-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
+                    >
+                      <CheckCircle className="w-4 h-4" /> Enviar para IA
+                    </button>
+                  )}
+
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileUpload}
+                    accept="application/pdf, text/plain"
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={processingFile}
+                    className="flex-1 p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 border border-slate-200"
+                  >
+                    <FileText className="w-4 h-4 text-teal-600" />
+                    {processingFile ? 'Lendo PDF...' : 'Subir PDF'}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const simulaAudio = prompt("O que você diria no áudio?", "Lança 45 reais na pizza ontem de noite compartilhada");
+                      if (simulaAudio) {
+                        processTextWithIA(simulaAudio);
+                      }
+                    }}
+                    className="p-2.5 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded-xl text-xs font-bold transition-all border border-teal-200"
+                    title="Mandar Áudio"
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* Lançamento Manual */}
+            <section className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+              <details className="group">
+                <summary className="text-sm font-bold text-slate-700 cursor-pointer list-none flex justify-between items-center">
+                  <span className="flex items-center gap-1.5">
+                    <PlusCircle className="w-4 h-4 text-emerald-600" /> Lançar Manualmente
+                  </span>
+                  <span className="text-xs text-slate-400 group-open:rotate-180 transition-transform">▼</span>
+                </summary>
+
+                <form onSubmit={handleManualAdd} className="space-y-4 mt-4 pt-4 border-t border-slate-100">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-extrabold text-slate-500 uppercase">Descrição</label>
+                      <input
+                        type="text"
+                        className="w-full p-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none text-slate-800"
+                        placeholder="Ex: Combustível"
+                        value={desc}
+                        onChange={(e) => setDesc(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-extrabold text-slate-500 uppercase">Valor (R$)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="w-full p-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none text-slate-800"
+                        placeholder="0.00"
+                        value={val}
+                        onChange={(e) => setVal(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-extrabold text-slate-500 uppercase">Quem Pagou?</label>
+                      <select
+                        className="w-full p-2.5 border border-slate-200 rounded-xl text-sm bg-white text-slate-800"
+                        value={paidBy}
+                        onChange={(e) => setPaidBy(e.target.value)}
+                      >
+                        <option value={user?.id}>Você</option>
+                        {partner && <option value={partner.id}>{partner.full_name}</option>}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-extrabold text-slate-500 uppercase">Categoria</label>
+                      <select
+                        className="w-full p-2.5 border border-slate-200 rounded-xl text-sm bg-white text-slate-800"
+                        value={cat}
+                        onChange={(e) => setCat(e.target.value)}
+                      >
+                        {categories.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 pt-2">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isShared}
+                        onChange={(e) => setIsShared(e.target.checked)}
+                        className="rounded text-emerald-600"
+                      />
+                      Dividir meio a meio?
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isFixed}
+                        onChange={(e) => setIsFixed(e.target.checked)}
+                        className="rounded text-emerald-600"
+                      />
+                      Replicar por 12 meses?
+                    </label>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full p-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm"
+                  >
+                    Inserir na fatura de {monthOptions.find(o => o.value === targetMonth)?.label}
+                  </button>
+                </form>
+              </details>
+            </section>
           </div>
-        </section>
+        )}
 
-        {/* Lançamento Manual */}
-        <section className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-          <details className="group">
-            <summary className="text-sm font-bold text-slate-700 cursor-pointer list-none flex justify-between items-center">
-              <span className="flex items-center gap-1.5">
-                <PlusCircle className="w-4 h-4 text-emerald-600" /> Lançar Manualmente
-              </span>
-              <span className="text-xs text-slate-400 group-open:rotate-180 transition-transform">▼</span>
-            </summary>
+        {/* ABA DE GRÁFICOS VISUAIS */}
+        {activeTab === 'charts' && isMounted && (
+          <div className="space-y-6">
+            
+            {/* Gráfico 1: Despesas por Categoria */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <PieIcon className="w-4 h-4 text-emerald-600" /> Distribuição por Categoria
+              </h4>
+              {getCategoryData().length === 0 ? (
+                <div className="text-center py-8">
+                  <AlertCircle className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                  <p className="text-xs text-slate-400 font-medium">Sem dados de gastos para gerar o gráfico de pizza.</p>
+                </div>
+              ) : (
+                <div>
+                  <div className="h-48">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={getCategoryData()}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={45}
+                          outerRadius={65}
+                          paddingAngle={3}
+                        >
+                          {getCategoryData().map((entry, idx) => (
+                            <Cell key={`cell-${idx}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <ChartTooltip formatter={(value: number) => `R$ ${Number(value).toFixed(2)}`} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
 
-            <form onSubmit={handleManualAdd} className="space-y-4 mt-4 pt-4 border-t border-slate-100">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-extrabold text-slate-500 uppercase">Descrição</label>
-                  <input
-                    type="text"
-                    className="w-full p-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none text-slate-800"
-                    placeholder="Ex: Combustível"
-                    value={desc}
-                    onChange={(e) => setDesc(e.target.value)}
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-extrabold text-slate-500 uppercase">Valor (R$)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="w-full p-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none text-slate-800"
-                    placeholder="0.00"
-                    value={val}
-                    onChange={(e) => setVal(e.target.value)}
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-extrabold text-slate-500 uppercase">Quem Pagou?</label>
-                  <select
-                    className="w-full p-2.5 border border-slate-200 rounded-xl text-sm bg-white text-slate-800"
-                    value={paidBy}
-                    onChange={(e) => setPaidBy(e.target.value)}
-                  >
-                    <option value={user?.id}>Você</option>
-                    {partner && <option value={partner.id}>{partner.full_name}</option>}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-extrabold text-slate-500 uppercase">Categoria</label>
-                  <select
-                    className="w-full p-2.5 border border-slate-200 rounded-xl text-sm bg-white text-slate-800"
-                    value={cat}
-                    onChange={(e) => setCat(e.target.value)}
-                  >
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                  {/* Legenda Customizada */}
+                  <div className="grid grid-cols-2 gap-2 pt-4 border-t border-slate-50 mt-2">
+                    {getCategoryData().map((entry, idx) => (
+                      <div key={idx} className="flex items-center gap-2 text-xs">
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: entry.color }} />
+                        <span className="text-slate-600 truncate font-semibold">{entry.name}:</span>
+                        <span className="text-slate-800 font-black ml-auto">R$ {entry.value.toFixed(2)}</span>
+                      </div>
                     ))}
-                  </select>
+                  </div>
                 </div>
-              </div>
+              )}
+            </div>
 
-              <div className="flex gap-4 pt-2">
-                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isShared}
-                    onChange={(e) => setIsShared(e.target.checked)}
-                    className="rounded text-emerald-600"
-                  />
-                  Dividir meio a meio?
-                </label>
-                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isFixed}
-                    onChange={(e) => setIsFixed(e.target.checked)}
-                    className="rounded text-emerald-600"
-                  />
-                  Replicar por 12 meses? (Fixo)
-                </label>
-              </div>
+            {/* Gráfico 2: Comparativo Quem Gastou Mais */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h4 className="text-xs font-extrabold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <BarChart2 className="w-4 h-4 text-teal-600" /> Comparativo: Quem Gastou Mais?
+              </h4>
+              
+              {transactions.length === 0 ? (
+                <div className="text-center py-8">
+                  <AlertCircle className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                  <p className="text-xs text-slate-400 font-medium">Sem dados de gastos para comparar este mês.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="h-40">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={getComparisonData()} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                        <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} tickLine={false} />
+                        <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
+                        <ChartTooltip formatter={(value: number) => `R$ ${Number(value).toFixed(2)}`} />
+                        <Bar dataKey="Gasto" radius={[6, 6, 0, 0]}>
+                          {getComparisonData().map((entry, idx) => (
+                            <Cell key={`cell-${idx}`} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
 
-              <button
-                type="submit"
-                className="w-full p-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-sm"
-              >
-                Inserir na fatura de {monthOptions.find(o => o.value === targetMonth)?.label}
-              </button>
-            </form>
-          </details>
-        </section>
+                  {/* Estatísticas de Apoio */}
+                  <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100/50">
+                    <div className="text-xs">
+                      <span className="text-slate-500 font-medium">Gasto Total Geral:</span>
+                      <p className="text-slate-800 font-black text-sm">
+                        R$ {(getComparisonData().reduce((acc, curr) => acc + curr['Gasto'], 0)).toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="text-xs text-right">
+                      <span className="text-slate-500 font-medium">Média por Pessoa:</span>
+                      <p className="text-teal-700 font-black text-sm">
+                        R$ {((getComparisonData().reduce((acc, curr) => acc + curr['Gasto'], 0)) / 2).toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
 
-        {/* Lista de Transações da Fatura Ativa */}
+          </div>
+        )}
+
+        {/* LISTA DE LANÇAMENTOS (Sempre visível como auditoria rápida) */}
         <section className="space-y-3">
           <h3 className="text-sm font-bold text-slate-700 px-1">
             Histórico — {monthOptions.find(o => o.value === selectedMonth)?.label}
@@ -597,7 +765,7 @@ export default function Dashboard() {
                         )}
                         {t.is_fixed && (
                           <span className="bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded">
-                            Fixo Replicado
+                            Fixo
                           </span>
                         )}
                       </div>
